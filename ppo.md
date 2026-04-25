@@ -56,7 +56,7 @@ PPO originally proposed two networks: the policy (actor) and a value function (c
 
 The PPO clipped objective (core idea)
 
-$$L^{\text{CLIP}}(\theta)=\hat{\mathbb{E}}_t\!\left[\min\!\left(r_t(\theta)\hat{A}_t,\ \text{clip}\big(r_t(\theta),\,1-\epsilon,\,1+\epsilon\big)\hat{A}_t\right)\right]$$
+$$L^{\text{CLIP}}(\theta)=\hat{\mathbb{E}}_t\!\left[\min\left(r_t(\theta)\hat{A}_t,\ \text{clip}\big(r_t(\theta),\,1-\epsilon,\,1+\epsilon\big)\hat{A}_t\right)\right]$$
 
 It basically means, improve the policy...BUT don't let it change too much
 

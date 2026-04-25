@@ -56,7 +56,7 @@ GRPO Objective Function:
 
 $$
 \[
-L=\mathbb{E}\!\left[\min\!\left(r_iA_i,\ \text{clip}(r_i,1-\epsilon,1+\epsilon)\,A_i\right)\right]
+L=\mathbb{E}\left[\min\left(r_iA_i,\ \text{clip}(r_i,1-\epsilon,1+\epsilon)\,A_i\right)\right]
 \]
 $$
 
