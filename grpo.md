@@ -21,6 +21,7 @@ Let's say model gives 5 different responses for a sinlge prompt, so intead of ab
 Core Idea
 
 Instead of raw reward $R$ we compute:
+
 $$
 \text{relative advantage}
 $$
@@ -28,11 +29,13 @@ $$
 Step 1: Sample a group
 
 For each prompt $x$, sample K outputs:
+
 $$
 y_1, y_2, y_3,.....,y_k
 $$
 
 Step 2: Compute Rewards
+
 $$
 R_1, R_2, R_3,.....,R_k
 $$
@@ -40,6 +43,7 @@ $$
 Step 3: Normalize within group
 
 This is the magic step:
+
 $$
 A_i = \frac{R_i - \mu}{\sigma}
 $$
@@ -61,8 +65,8 @@ L=\mathbb{E}\left[\min\left(r_iA_i,\ \text{clip}(r_i,1-\epsilon,1+\epsilon)\,A_i
 $$
 
 Where:
-- $ r_i=\frac{\pi_\theta(y_i\mid x)}{\pi_{\text{old}}(y_i\mid x)}$
-- $ A_i $ = group-normalized advantage
+- $r_i=\frac{\pi_\theta(y_i\mid x)}{\pi_{\text{old}}(y_i\mid x)}$
+- $A_i$ = group-normalized advantage
 
 Key difference from PPO
 - PPO uses value function to estimate advantage
@@ -80,14 +84,18 @@ Full GRPO Pipeline
 2. Generate $K$ responses
 3. Compute rewards $R_i$
 4. Normalize rewards:
+
 $$
 A_i = \frac{R_i - \mu}{\sigma}
 $$
+
 5. Compute log probabilites
 6. Compute ratio:
+
 $$
 r_i = exp(log\pi_\theta - log\pi_{\text{old}})
 $$
+
 7. Apply PPO clipping loss
 8. Optimize
 
@@ -110,6 +118,7 @@ So now, A has an negative advantage, B has a positive advantage, and C has a pos
 2. No gounding to real reward scale
 
 Because we normalize:
+
 $$
 A_i = \frac{R_i - \mu}{\sigma}
 $$

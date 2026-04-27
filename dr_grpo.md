@@ -11,8 +11,11 @@ For example, let's say there's a class of students, so the GRPO student thinks "
 What it fixes:
 
 only relative -> Add absolute reward
+
 no grounding -> anchor to real reward
+
 bias risk -> Reduce bias via correction
+
 no baseline -> add correction term
 
 It's basically like, don't fully trust ranking, but also correct it using actual rewards.
@@ -20,6 +23,7 @@ It's basically like, don't fully trust ranking, but also correct it using actual
 Core Concept:
 
 GRPO uses: 
+
 $$
 A_i = \frac{R_i - \mu}{\sigma}
 $$
@@ -29,6 +33,7 @@ but Dr GRPO says, this is incomplete. So we adjust it using extra information
 We introduce something like, "How wrong is my current estimate?" and then fix it
 
 Conceptually, it's like:
+
 $$
 \text{Better Advantage} = \text{GRPO Advantage} + \text{Correction Term}
 $$
@@ -57,11 +62,13 @@ Dr GRPO improves GRPO by:
 - Reducing bias + variance together
 
 GRPO Advantage:
+
 $$
 A_i^\text{GRPO} = \frac{R_i - \mu}{\sigma}
 $$
 
 We want absolute correctness too, so we introduce a base line
+
 $$
 b(x)
 $$
@@ -105,6 +112,7 @@ We have multiple options:
 In practice, we usually use a running baseline model
 
 Final loss function is the same PPO
+
 $$
 L=\mathbb{E}\!\left[\min\!\left(r_iA_i,\ \text{clip}(r_i,1-\epsilon,1+\epsilon)\,A_i\right)\right]
 $$
