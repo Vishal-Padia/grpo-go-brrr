@@ -1,130 +1,131 @@
 Core Idea:
 
-Dr GRPO combines, relative ranking (liek grpo) and absolute reward signal (what GRPO was missing)
+Dr. means "Done Right."
 
-Dr = Doubly Robust
+The key point is simple: Dr. GRPO removes two normalizations in GRPO that introduce bias during LLM training.
 
-It means that we use two sources of learning signals instead of just one.
+No value model. No extra baseline. No lambda mixing term.
 
-For example, let's say there's a class of students, so the GRPO student thinks "I just need to be better than classmates" (even if the whole class is weak, they still thinks they're good), Dr GRPO student thinks, "I compare with classmates AND check answer key", so they're more robust to the class being weak.
+Just remove two denominators that look harmless but cause bad optimization behavior.
 
-What it fixes:
+What Dr. GRPO actually fixes
 
-only relative -> Add absolute reward
+GRPO (common form) does two things:
 
-no grounding -> anchor to real reward
-
-bias risk -> Reduce bias via correction
-
-no baseline -> add correction term
-
-It's basically like, don't fully trust ranking, but also correct it using actual rewards.
-
-Core Concept:
-
-GRPO uses: 
+1. It normalizes advantage by group std:
 
 $$
 A_i = \frac{R_i - \mu}{\sigma}
 $$
 
-but Dr GRPO says, this is incomplete. So we adjust it using extra information
-
-We introduce something like, "How wrong is my current estimate?" and then fix it
-
-Conceptually, it's like:
+2. It averages each sample loss by response length:
 
 $$
-\text{Better Advantage} = \text{GRPO Advantage} + \text{Correction Term}
+\frac{1}{|o_i|}\sum_{t=1}^{|o_i|}(\cdot)
 $$
 
-The correction from reward model vs policy expectation mismatch, meaning what reward says vs what policy "thinks" is good
+Dr. GRPO says both of these create bias.
 
-GRPO was ranking-based learning, but Dr. GRPO is ranking + calibration
+So it deletes both.
 
-Calibration = alinging with real reward scale
 
-It's called robust, because if one signal is wrong, the other helps to fix it
+Bias 1: Response-length normalization bias
 
-Case 1:
-
-Reward model noisy -> relative ranking helps
-
-Case 2: 
-
-Group weak -> absolute reward helps
-
-That's "double robustness"
-
-Dr GRPO improves GRPO by:
-- Keeping relative ranking
-- Adding absolute reward correction
-- Reducing bias + variance together
-
-GRPO Advantage:
+Original GRPO token objective (per sample) is scaled by:
 
 $$
-A_i^\text{GRPO} = \frac{R_i - \mu}{\sigma}
+\frac{1}{|o_i|}
 $$
 
-We want absolute correctness too, so we introduce a base line
+At first glance this feels fair ("average per token"), but it is not neutral.
+
+When $A_i < 0$ (bad response), longer responses get weaker per-token penalty due to division by $|o_i|$.
+
+That means the model can reduce penalty by being wrong for longer.
+
+So training drifts toward unnecessary long completions, especially in late-stage RL.
+
+Dr. GRPO fix:
+
+Drop the $\frac{1}{|o_i|}$ factor.
+
+Use token-sum style weighting instead of per-response average.
+
+
+Bias 2: Question-difficulty bias from std normalization
+
+Original GRPO uses:
 
 $$
-b(x)
+A_i = \frac{R_i - \mu}{\sigma}
 $$
 
-It's like the expected reward for this prompt. GRPO compares within group, $b(x)$ gives global expectation
+If a group has tiny reward std, dividing by small $\sigma$ amplifies gradient magnitude.
 
-Absolute Advantage term:
+So those prompts dominate updates even when they are not informative.
 
-$$
-A_i^{abs} = R_i - b(x)
-$$
+This over-weights very easy or very hard questions (low spread), and under-weights medium-difficulty questions where learning signal is strongest.
 
-If reward is higher than expected -> positive advantage
+Dr. GRPO fix:
 
-if lower -> negative advantage
+Drop the std division.
 
-Now we combine both signals
+Use:
 
 $$
-A_i^{\text{DrGRPO}} = A_I^{abs} + \lambda * (R_i - b(x))
+A_i = R_i - \mu
 $$
 
-Where $\lambda$ = weight (how much we trust absolute signal)
+Still relative to group mean, but no unstable amplification by $1/\sigma$.
+
+
+Final Dr. GRPO objective
+
+For prompt $x$, group size $G$, completion $o_i$ with length $|o_i|$:
 
 $$
-A_i^{\text{DrGRPO}} = \frac{R_i - \mu}{\sigma} + \lambda * (R_i - b(x))
+L_{\text{Dr.GRPO}}(\theta) =
+\frac{1}{G}
+\sum_{i=1}^{G}
+\sum_{t=1}^{|o_i|}
+\min\!\left(
+r_{i,t}(\theta)A_i,\,
+\text{clip}(r_{i,t}(\theta),1-\epsilon,1+\epsilon)A_i
+\right)
 $$
 
-First term gives us ranking, second term gives us absolute correction
- 
-ie best of both worlds
-
-Where does $b(x)$ come from?
-
-We have multiple options:
-
-- Mean of all rewards
-- Moving average
-- Small value model (lightweight)
-
-In practice, we usually use a running baseline model
-
-Final loss function is the same PPO
+where
 
 $$
-L=\mathbb{E}\!\left[\min\!\left(r_iA_i,\ \text{clip}(r_i,1-\epsilon,1+\epsilon)\,A_i\right)\right]
+A_i = R_i - \text{mean}(\mathbf{R})
 $$
 
-Where $A_i = A_i^{\text{DrGRPO}}$
+and
 
-Dr GRPO only modifies the advantage, everything else stays the same
+$$
+r_{i,t}(\theta)=
+\frac{\pi_{\theta}(o_{i,t}\mid x,o_{i,<t})}
+{\pi_{\theta_{\text{old}}}(o_{i,t}\mid x,o_{i,<t})}
+$$
 
-What $\lambda$ does?
+That's it.
 
-- 0 -> pure GRPO
-- small -> mostly relative
-- large -> more absolute
+Two deletions from GRPO:
+- remove $\frac{1}{|o_i|}$
+- remove $\frac{1}{\sigma}$
 
-So basically, lambda controls the balance between relative and absolute
+
+
+Why this matters (practically)
+
+This is a tiny mathematical change, but behaviorally it is huge:
+
+- output length stops drifting upward just because of objective bias
+- updates stop being dominated by low-std groups
+- training signal aligns better with actual improvement
+
+So Dr. GRPO is not "more machinery than GRPO."
+
+It is literally GRPO with two bias-inducing normalizers removed.
+
+That is why implementation delta from GRPO should be just a few lines.
