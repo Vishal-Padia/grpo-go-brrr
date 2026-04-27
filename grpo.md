@@ -61,8 +61,8 @@ L=\mathbb{E}\left[\min\left(r_iA_i,\ \text{clip}(r_i,1-\epsilon,1+\epsilon)\,A_i
 $$
 
 Where:
-- $$ r_i=\frac{\pi_\theta(y_i\mid x)}{\pi_{\text{old}}(y_i\mid x)}$$
-- $$ A_i $$ = group-normalized advantage
+- $ r_i=\frac{\pi_\theta(y_i\mid x)}{\pi_{\text{old}}(y_i\mid x)}$
+- $ A_i $ = group-normalized advantage
 
 Key difference from PPO
 - PPO uses value function to estimate advantage
