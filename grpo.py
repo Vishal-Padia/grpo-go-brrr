@@ -1,4 +1,5 @@
 import re
+import time
 
 import torch
 from datasets import load_dataset
@@ -285,17 +286,26 @@ def main():
     gsm_8k_dataset = load_gsm8k()
     optimizer = AdamW(model.parameters(), lr=LR)
 
+    use_cuda = DEVICE == "cuda"
+
+    def sync():
+        if use_cuda:
+            torch.cuda.synchronize()
+
     for step in range(EPOCHS):
         # eval
         if step % EVAL_EVERY == 0:
             eval_acc = evaluate(model, tokenizer, gsm_8k_dataset)
-            wandb.log({"eval_exact_match": eval_acc, "step": step})
+            wandb.log({"eval_exact_match": eval_acc}, step=step)
 
-        # rollout phase
+        # rollout setup (cheap CPU work)
         questions, gold_answers = sample_batch(gsm_8k_dataset, BATCH_SIZE)
         formatted_data = [format_prompt(q, tokenizer) for q in questions]
         tokenized_data = tokenize(formatted_data, tokenizer)
 
+        # generate phase (GPU-bound)
+        sync()
+        t0 = time.perf_counter()
         completion_ids = generate_completions(
             model,
             tokenized_data["input_ids"],
@@ -303,15 +313,21 @@ def main():
             tokenizer,
         )
         mask = build_completion_mask(completion_ids, tokenizer.eos_token_id)
+        sync()
+        t_generate = time.perf_counter() - t0
 
+        # reward phase (CPU decode + extract)
+        t0 = time.perf_counter()
         rewards, decoded = compute_rewards(completion_ids, gold_answers, tokenizer, G)
-
         B = len(questions)
         rewards_grouped = rewards.view(B, G)
         advantages_grouped = rewards_grouped - rewards_grouped.mean(dim=1, keepdim=True)
         advantages = advantages_grouped.view(B * G)
+        t_reward = time.perf_counter() - t0
 
         # old + ref log-probs: detached, reused across inner steps
+        sync()
+        t0 = time.perf_counter()
         with torch.no_grad():
             old_logprobs = compute_logprobs(
                 model,
@@ -327,8 +343,13 @@ def main():
                 completion_ids,
                 mask,
             )
+        sync()
+        t_logprobs = time.perf_counter() - t0
 
         # update phase
+        sync()
+        t0 = time.perf_counter()
+        kl_value = 0.0
         for inner in range(K):
             current_logprobs = compute_logprobs(
                 model,
@@ -347,6 +368,11 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP)
             optimizer.step()
 
+            if inner == K - 1:
+                kl_value = kl.detach().item()
+        sync()
+        t_update = time.perf_counter() - t0
+
         # metrics
         n = B * G
         n_format = sum(1 for c in decoded if extract_answer(c) is not None)
@@ -362,17 +388,24 @@ def main():
 
         wandb.log(
             {
-                "step": step,
                 "reward_mean": rewards.mean().item(),
                 "loss": loss.item(),
+                "kl": kl_value,
                 "format_rate": format_rate,
                 "exact_match": exact_rate,
                 "mean_completion_length": mean_len,
-            }
+                "time_generate": t_generate,
+                "time_reward": t_reward,
+                "time_logprobs": t_logprobs,
+                "time_update": t_update,
+            },
+            step=step,
         )
         print(
             f"step {step}: reward={rewards.mean().item():.3f} loss={loss.item():.4f} "
-            f"format={format_rate:.2f} exact={exact_rate:.2f} len={mean_len:.0f}"
+            f"kl={kl_value:.4f} format={format_rate:.2f} exact={exact_rate:.2f} "
+            f"len={mean_len:.0f} | gen={t_generate:.2f}s reward={t_reward:.2f}s "
+            f"logprobs={t_logprobs:.2f}s update={t_update:.2f}s"
         )
 
     wandb.finish()
