@@ -23,7 +23,12 @@ EVAL_SIZE = 64
 BETA = 0.04
 MAX_NEW_TOKENS = 256
 
-ANSWER_RE = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
+# Match Qwen-style answer formats. `####` is what we ask for; the rest are
+# fallbacks because instruct models default to LaTeX/markdown math habits.
+ANSWER_RE = re.compile(
+    r"(?:####|\\boxed\{|answer is\s*:?\s*|=)\s*\$?(-?\d+(?:\.\d+)?)\$?\}?",
+    re.IGNORECASE,
+)
 
 
 def load_model():
@@ -57,7 +62,12 @@ def format_prompt(question, tokenizer):
     messages = [
         {
             "role": "system",
-            "content": "Solve step by step. Give your final answer in the format: #### NUMBER",
+            "content": (
+                "Solve the problem. Show brief reasoning, then on the LAST LINE "
+                "write exactly: #### NUMBER\n"
+                "Do not use LaTeX. Do not use \\boxed. "
+                "The very last line must start with #### followed by the integer answer."
+            ),
         },
         {"role": "user", "content": question},
     ]
@@ -128,10 +138,12 @@ def build_completion_mask(completion_ids, eos_token_id):
 
 
 def extract_answer(text):
+    # Take the LAST match so intermediate calculations like "3 + 5 = 8" don't
+    # win over the model's actual final answer at the end.
     if text is None:
         return None
-    match = ANSWER_RE.search(text)
-    return match.group(1).strip() if match else None
+    matches = ANSWER_RE.findall(text)
+    return matches[-1].strip() if matches else None
 
 
 def compute_rewards(completion_ids, gold_answers, tokenizer, num_generations=G):
