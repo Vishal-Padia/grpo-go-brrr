@@ -1,26 +1,15 @@
-# initial approach
-# 1. load SmolLM2-135M
-# 2. load GSM8K dataset and tokenize it
-# 3. sample some completions
-# 4. compute fake reward (literally random.random())
-# 5. compute fake advantage
-# 6. computes loss
-# 7. calls loss.backward()
-# 8. steps the optimizer
-
-
-# basically it should just run without any errors and then we can build on it, ie by replacing functions with actual implementation - DONE DONE DONE
-
 import re
 
 import torch
-import wandb
 from datasets import load_dataset
 from torch.nn import functional as F
 from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+import wandb
+
 torch.manual_seed(42)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 EPOCHS = 200
 G = 16
 BATCH_SIZE = 1
@@ -33,15 +22,17 @@ MAX_NEW_TOKENS = 256
 ANSWER_RE = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
 
 
-def load_smol():
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M")
-    model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM2-135M")
+def load_model():
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen2.5-0.5B-Instruct", dtype=torch.bfloat16
+    )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
-    if torch.cuda.is_available():
-        model = model.to("cuda")
+    model = model.to(DEVICE)
 
     return tokenizer, model
 
@@ -58,36 +49,20 @@ def sample_batch(dataset, batch_size):
     return questions, answers
 
 
-FEW_SHOT = """Question: Janet has 3 apples and buys 5 more. How many apples does she have?
-
-Solve step by step. Give your final answer in the format: #### NUMBER
-
-Answer: Janet starts with 3 apples and buys 5 more.
-3 + 5 = 8.
-#### 8
-
-Question: A train travels 60 miles in 2 hours. What is its average speed in miles per hour?
-
-Solve step by step. Give your final answer in the format: #### NUMBER
-
-Answer: Average speed is distance divided by time.
-60 / 2 = 30.
-#### 30
-
-"""
-
-
-def format_prompt(question):
-    return (
-        FEW_SHOT
-        + f"Question: {question}\n\n"
-        + "Solve step by step. Give your final answer in the format: #### NUMBER\n\n"
-        + "Answer:"
+def format_prompt(question, tokenizer):
+    messages = [
+        {
+            "role": "system",
+            "content": "Solve step by step. Give your final answer in the format: #### NUMBER",
+        },
+        {"role": "user", "content": question},
+    ]
+    return tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, tokenize=False
     )
 
 
 def tokenize(prompts, tokenizer):
-    tokenizer.padding_side = "left"
     return tokenizer(prompts, padding=True, truncation=True, return_tensors="pt")
 
 
@@ -99,8 +74,8 @@ def generate_completions(
     num_generations=G,
     max_new_tokens=MAX_NEW_TOKENS,
 ):
-    prompt_ids = prompt_ids.to("cuda")
-    attention_mask = attention_mask.to("cuda")
+    prompt_ids = prompt_ids.to(DEVICE)
+    attention_mask = attention_mask.to(DEVICE)
 
     output = policy.generate(
         input_ids=prompt_ids,
@@ -237,7 +212,7 @@ def main():
     wandb.init(
         project="grpo-go-brrr",
         config={
-            "model": "HuggingFaceTB/SmolLM2-135M",
+            "model": "Qwen/Qwen2.5-0.5B-Instruct",
             "dataset": "openai/gsm8k",
             "epochs": EPOCHS,
             "G": G,
@@ -250,14 +225,14 @@ def main():
         },
     )
 
-    tokenizer, model = load_smol()
+    tokenizer, model = load_model()
     gsm_8k_dataset = load_gsm8k()
     optimizer = AdamW(model.parameters(), lr=LR)
 
     for step in range(EPOCHS):
         # rollout phase
         questions, gold_answers = sample_batch(gsm_8k_dataset, BATCH_SIZE)
-        formatted_data = [format_prompt(q) for q in questions]
+        formatted_data = [format_prompt(q, tokenizer) for q in questions]
         tokenized_data = tokenize(formatted_data, tokenizer)
 
         completion_ids = generate_completions(
