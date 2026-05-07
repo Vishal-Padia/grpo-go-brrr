@@ -17,6 +17,7 @@ K = 4
 LR = 1e-6
 EPS = 0.2
 GRAD_CLIP = 1.0
+BETA = 0.04
 MAX_NEW_TOKENS = 256
 
 ANSWER_RE = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
@@ -208,6 +209,12 @@ def grpo_loss(current_logprobs, old_logprobs, advantages, completion_mask, eps=E
     return loss_per_response.mean()
 
 
+def masked_kl(current, ref, mask):
+    diff = ref - current
+    kl = torch.exp(diff) - diff - 1  # always >= 0
+    return (kl * mask).sum(dim=1).mean()
+
+
 def main():
     wandb.init(
         project="grpo-go-brrr",
@@ -218,6 +225,7 @@ def main():
             "G": G,
             "batch_size": BATCH_SIZE,
             "K": K,
+            "beta": BETA,
             "lr": LR,
             "eps": EPS,
             "grad_clip": GRAD_CLIP,
@@ -226,6 +234,16 @@ def main():
     )
 
     tokenizer, model = load_model()
+
+    # load the model and freeze it
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen2.5-0.5B-Instruct", dtype=torch.bfloat16
+    )
+    ref_model.to(DEVICE)
+    ref_model.eval()
+    for p in ref_model.parameters():
+        p.requires_grad = False
+
     gsm_8k_dataset = load_gsm8k()
     optimizer = AdamW(model.parameters(), lr=LR)
 
@@ -250,10 +268,17 @@ def main():
         advantages_grouped = rewards_grouped - rewards_grouped.mean(dim=1, keepdim=True)
         advantages = advantages_grouped.view(B * G)
 
-        # old log-probs: detached snapshot from the rollout policy, reused across inner steps
+        # old + ref log-probs: detached, reused across inner steps
         with torch.no_grad():
             old_logprobs = compute_logprobs(
                 model,
+                tokenized_data["input_ids"],
+                tokenized_data["attention_mask"],
+                completion_ids,
+                mask,
+            )
+            ref_logprobs = compute_logprobs(
+                ref_model,
                 tokenized_data["input_ids"],
                 tokenized_data["attention_mask"],
                 completion_ids,
@@ -269,7 +294,10 @@ def main():
                 completion_ids,
                 mask,
             )
-            loss = grpo_loss(current_logprobs, old_logprobs, advantages, mask)
+            kl = masked_kl(current_logprobs, ref_logprobs, mask)
+            loss = (
+                grpo_loss(current_logprobs, old_logprobs, advantages, mask) + BETA * kl
+            )
 
             optimizer.zero_grad()
             loss.backward()
