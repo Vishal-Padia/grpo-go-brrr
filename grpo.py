@@ -11,10 +11,10 @@ import wandb
 
 torch.manual_seed(42)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-EPOCHS = 200
-G = 16
-BATCH_SIZE = 1
-K = 4
+EPOCHS = 1000
+G = 8
+BATCH_SIZE = 2
+K = 2
 LR = 1e-6
 EPS = 0.2
 GRAD_CLIP = 1.0
