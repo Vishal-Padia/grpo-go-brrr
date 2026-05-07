@@ -17,6 +17,8 @@ K = 4
 LR = 1e-6
 EPS = 0.2
 GRAD_CLIP = 1.0
+EVAL_EVERY = 25
+EVAL_SIZE = 64
 BETA = 0.04
 MAX_NEW_TOKENS = 256
 
@@ -74,20 +76,24 @@ def generate_completions(
     tokenizer,
     num_generations=G,
     max_new_tokens=MAX_NEW_TOKENS,
+    do_sample=True,
 ):
     prompt_ids = prompt_ids.to(DEVICE)
     attention_mask = attention_mask.to(DEVICE)
 
-    output = policy.generate(
+    gen_kwargs = dict(
         input_ids=prompt_ids,
         attention_mask=attention_mask,
         num_return_sequences=num_generations,
-        do_sample=True,
-        temperature=1.0,
-        top_p=0.95,
+        do_sample=do_sample,
         max_new_tokens=max_new_tokens,
         pad_token_id=tokenizer.pad_token_id,
     )
+    if do_sample:
+        gen_kwargs["temperature"] = 1.0
+        gen_kwargs["top_p"] = 0.95
+
+    output = policy.generate(**gen_kwargs)
     # output shape: (B*G, prompt_len + completion_len)
     # slice off the prompt to get just the completion
     prompt_len = prompt_ids.shape[1]
@@ -215,6 +221,38 @@ def masked_kl(current, ref, mask):
     return (kl * mask).sum(dim=1).mean()
 
 
+def evaluate(model, tokenizer, dataset, n=EVAL_SIZE):
+    model.eval()
+    test_examples = dataset["test"].select(range(n))
+    questions = [ex["question"] for ex in test_examples]
+    answers = [ex["answer"] for ex in test_examples]
+
+    prompts = [format_prompt(q, tokenizer) for q in questions]
+    tokenized = tokenize(prompts, tokenizer)
+
+    with torch.no_grad():
+        completion_ids = generate_completions(
+            model,
+            tokenized["input_ids"],
+            tokenized["attention_mask"],
+            tokenizer,
+            num_generations=1,
+            do_sample=False,
+        )
+
+    decoded = [tokenizer.decode(c, skip_special_tokens=True) for c in completion_ids]
+    exact = (
+        sum(
+            1
+            for c, a in zip(decoded, answers)
+            if extract_answer(c) is not None and extract_answer(c) == extract_answer(a)
+        )
+        / n
+    )
+    model.train()
+    return exact
+
+
 def main():
     wandb.init(
         project="grpo-go-brrr",
@@ -248,6 +286,11 @@ def main():
     optimizer = AdamW(model.parameters(), lr=LR)
 
     for step in range(EPOCHS):
+        # eval
+        if step % EVAL_EVERY == 0:
+            eval_acc = evaluate(model, tokenizer, gsm_8k_dataset)
+            wandb.log({"eval_exact_match": eval_acc, "step": step})
+
         # rollout phase
         questions, gold_answers = sample_batch(gsm_8k_dataset, BATCH_SIZE)
         formatted_data = [format_prompt(q, tokenizer) for q in questions]
